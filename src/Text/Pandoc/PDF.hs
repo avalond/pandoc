@@ -34,7 +34,7 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as BC
 import qualified Data.ByteString as BS
-import Text.Pandoc.Compat.Monoid ((<>))
+import Data.Monoid ((<>))
 import System.Exit (ExitCode (..))
 import System.FilePath
 import System.IO (stderr, stdout)
@@ -131,7 +131,8 @@ handleImage' opts tmpdir (Image attr ils (src,tit)) = do
                 return $ Image attr ils (fname,tit)
               _ -> do
                 warn $ "Could not find image `" ++ src ++ "', skipping..."
-                return $ Image attr ils (src,tit)
+                -- return alt text
+                return $ Emph ils
 handleImage' _ _ x = return x
 
 convertImages :: FilePath -> Inline -> IO Inline

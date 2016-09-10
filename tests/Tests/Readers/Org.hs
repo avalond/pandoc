@@ -219,12 +219,12 @@ tests =
           (para $ link "" "" "New Link")
 
       , "Image link" =:
-          "[[sunset.png][dusk.svg]]" =?>
+          "[[sunset.png][file:dusk.svg]]" =?>
           (para $ link "sunset.png" "" (image "dusk.svg" "" ""))
 
       , "Image link with non-image target" =:
-          "[[http://example.com][logo.png]]" =?>
-          (para $ link "http://example.com" "" (image "logo.png" "" ""))
+          "[[http://example.com][./logo.png]]" =?>
+          (para $ link "http://example.com" "" (image "./logo.png" "" ""))
 
       , "Plain link" =:
           "Posts on http://zeitlens.com/ can be funny at times." =?>
@@ -467,7 +467,14 @@ tests =
       , "Author" =:
         "#+author: Albert /Emacs-Fanboy/ Krewinkel" =?>
         let author = toList . spcSep $ [ "Albert", emph "Emacs-Fanboy", "Krewinkel" ]
-            meta = setMeta "author" (MetaInlines author) $ nullMeta
+            meta = setMeta "author" (MetaList [MetaInlines author]) $ nullMeta
+        in Pandoc meta mempty
+
+      , "Multiple authors" =:
+        "#+author: James Dewey Watson, Francis Harry Compton Crick " =?>
+        let watson = MetaInlines $ toList "James Dewey Watson"
+            crick = MetaInlines $ toList "Francis Harry Compton Crick"
+            meta = setMeta "author" (MetaList [watson, crick]) $ nullMeta
         in Pandoc meta mempty
 
       , "Date" =:
@@ -478,8 +485,8 @@ tests =
 
       , "Description" =:
         "#+DESCRIPTION: Explanatory text" =?>
-        let description = toList . spcSep $ [ "Explanatory", "text" ]
-            meta = setMeta "description" (MetaInlines description) $ nullMeta
+        let description = "Explanatory text"
+            meta = setMeta "description" (MetaString description) $ nullMeta
         in Pandoc meta mempty
 
       , "Properties drawer" =:
@@ -488,6 +495,38 @@ tests =
                   , "  :END:"
                   ] =?>
           (mempty::Blocks)
+
+      , "LaTeX_headers options are translated to header-includes" =:
+          "#+LaTeX_header: \\usepackage{tikz}" =?>
+          let latexInlines = rawInline "latex" "\\usepackage{tikz}"
+              inclList = MetaList [MetaInlines (toList latexInlines)]
+              meta = setMeta "header-includes" inclList nullMeta
+          in Pandoc meta mempty
+
+      , "LaTeX_class option is translated to documentclass" =:
+          "#+LATEX_CLASS: article" =?>
+          let meta = setMeta "documentclass" (MetaString "article") nullMeta
+          in Pandoc meta mempty
+
+      , "LaTeX_class_options is translated to classoption" =:
+          "#+LATEX_CLASS_OPTIONS: [a4paper]" =?>
+          let meta = setMeta "classoption" (MetaString "a4paper") nullMeta
+          in Pandoc meta mempty
+
+      , "LaTeX_class_options is translated to classoption" =:
+          "#+html_head: <meta/>" =?>
+          let html = rawInline "html" "<meta/>"
+              inclList = MetaList [MetaInlines (toList html)]
+              meta = setMeta "header-includes" inclList nullMeta
+          in Pandoc meta mempty
+
+      , "later meta definitions take precedence" =:
+          unlines [ "#+AUTHOR: this will not be used"
+                  , "#+author: Max"
+                  ] =?>
+          let author = MetaInlines [Str "Max"]
+              meta = setMeta "author" (MetaList [author]) $ nullMeta
+          in Pandoc meta mempty
 
       , "Logbook drawer" =:
           unlines [ "  :LogBook:"
@@ -563,69 +602,91 @@ tests =
                   ] =?>
           (para (link "http://example.com/foo" "" "bar"))
 
-      , "Export option: Disable simple sub/superscript syntax" =:
-          unlines [ "#+OPTIONS: ^:nil"
-                  , "a^b"
-                  ] =?>
-          para "a^b"
 
-      , "Export option: directly select drawers to be exported" =:
-          unlines [ "#+OPTIONS: d:(\"IMPORTANT\")"
-                  , ":IMPORTANT:"
-                  , "23"
-                  , ":END:"
-                  , ":BORING:"
-                  , "very boring"
-                  , ":END:"
-                  ] =?>
-          divWith (mempty, ["IMPORTANT", "drawer"], mempty) (para "23")
+      , testGroup "export options"
 
-      , "Export option: exclude drawers from being exported" =:
-          unlines [ "#+OPTIONS: d:(not \"BORING\")"
-                  , ":IMPORTANT:"
-                  , "5"
-                  , ":END:"
-                  , ":BORING:"
-                  , "very boring"
-                  , ":END:"
-                  ] =?>
-          divWith (mempty, ["IMPORTANT", "drawer"], mempty) (para "5")
+          [ "disable simple sub/superscript syntax" =:
+              unlines [ "#+OPTIONS: ^:nil"
+                      , "a^b"
+                      ] =?>
+              para "a^b"
 
-      , "Export option: don't include archive trees" =:
-          unlines [ "#+OPTIONS: arch:nil"
-                  , "* old  :ARCHIVE:"
-                  ] =?>
-          (mempty ::Blocks)
+          , "directly select drawers to be exported" =:
+              unlines [ "#+OPTIONS: d:(\"IMPORTANT\")"
+                      , ":IMPORTANT:"
+                      , "23"
+                      , ":END:"
+                      , ":BORING:"
+                      , "very boring"
+                      , ":END:"
+                      ] =?>
+              divWith (mempty, ["IMPORTANT", "drawer"], mempty) (para "23")
 
-      , "Export option: include complete archive trees" =:
-          unlines [ "#+OPTIONS: arch:t"
-                  , "* old  :ARCHIVE:"
-                  , "  boring"
-                  ] =?>
-          let tagSpan t = spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
-          in mconcat [ headerWith ("old", [], mempty) 1 ("old" <> tagSpan "ARCHIVE")
-                     , para "boring"
-                     ]
+          , "exclude drawers from being exported" =:
+              unlines [ "#+OPTIONS: d:(not \"BORING\")"
+                      , ":IMPORTANT:"
+                      , "5"
+                      , ":END:"
+                      , ":BORING:"
+                      , "very boring"
+                      , ":END:"
+                      ] =?>
+              divWith (mempty, ["IMPORTANT", "drawer"], mempty) (para "5")
 
-      , "Export option: include archive tree header only" =:
-          unlines [ "#+OPTIONS: arch:headline"
-                  , "* old  :ARCHIVE:"
-                  , "  boring"
-                  ] =?>
-          let tagSpan t = spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
-          in headerWith ("old", [], mempty) 1 ("old" <> tagSpan "ARCHIVE")
+          , "don't include archive trees" =:
+              unlines [ "#+OPTIONS: arch:nil"
+                      , "* old  :ARCHIVE:"
+                      ] =?>
+              (mempty ::Blocks)
 
-      , "Export option: limit headline depth" =:
-          unlines [ "#+OPTIONS: H:2"
-                  , "* section"
-                  , "** subsection"
-                  , "*** list item 1"
-                  , "*** list item 2"
-                  ] =?>
-          mconcat [ headerWith ("section", [], [])    1 "section"
-                  , headerWith ("subsection", [], []) 2 "subsection"
-                  , orderedList [ para "list item 1", para "list item 2" ]
-                  ]
+          , "include complete archive trees" =:
+              unlines [ "#+OPTIONS: arch:t"
+                      , "* old  :ARCHIVE:"
+                      , "  boring"
+                      ] =?>
+              let tagSpan t = spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
+              in mconcat [ headerWith ("old", [], mempty) 1 ("old" <> tagSpan "ARCHIVE")
+                         , para "boring"
+                         ]
+
+          , "include archive tree header only" =:
+              unlines [ "#+OPTIONS: arch:headline"
+                      , "* old  :ARCHIVE:"
+                      , "  boring"
+                      ] =?>
+              let tagSpan t = spanWith ("", ["tag"], [("data-tag-name", t)]) mempty
+              in headerWith ("old", [], mempty) 1 ("old" <> tagSpan "ARCHIVE")
+
+          , "limit headline depth" =:
+              unlines [ "#+OPTIONS: H:2"
+                      , "* section"
+                      , "** subsection"
+                      , "*** list item 1"
+                      , "*** list item 2"
+                      ] =?>
+              mconcat [ headerWith ("section", [], [])    1 "section"
+                      , headerWith ("subsection", [], []) 2 "subsection"
+                      , orderedList [ para "list item 1", para "list item 2" ]
+                      ]
+
+          , "disable author export" =:
+              unlines [ "#+OPTIONS: author:nil"
+                      , "#+AUTHOR: ShyGuy"
+                      ] =?>
+              Pandoc nullMeta mempty
+
+          , "disable creator export" =:
+              unlines [ "#+OPTIONS: creator:nil"
+                      , "#+creator: The Architect"
+                      ] =?>
+              Pandoc nullMeta mempty
+
+          , "disable email export" =:
+              unlines [ "#+OPTIONS: email:nil"
+                      , "#+email: no-mail-please@example.com"
+                      ] =?>
+              Pandoc nullMeta mempty
+          ]
       ]
 
   , testGroup "Basic Blocks" $
@@ -757,6 +818,15 @@ tests =
                   ] =?>
           headerWith ("fubar", [], [("bar", "baz")]) 1 "foo"
 
+
+      , "Headers marked with a unnumbered property get a class of the same name" =:
+          unlines [ "* Not numbered"
+                  , "  :PROPERTIES:"
+                  , "  :UNNUMBERED: t"
+                  , "  :END:"
+                  ] =?>
+          headerWith ("not-numbered", ["unnumbered"], []) 1 "Not numbered"
+
       , "Paragraph starting with an asterisk" =:
           "*five" =?>
           para "*five"
@@ -810,29 +880,29 @@ tests =
         [ "Figure" =:
             unlines [ "#+caption: A very courageous man."
                     , "#+name: goodguy"
-                    , "[[edward.jpg]]"
+                    , "[[file:edward.jpg]]"
                     ] =?>
             para (image "edward.jpg" "fig:goodguy" "A very courageous man.")
 
         , "Figure with no name" =:
             unlines [ "#+caption: I've been through the desert on this"
-                    , "[[horse.png]]"
+                    , "[[file:horse.png]]"
                     ] =?>
             para (image "horse.png" "fig:" "I've been through the desert on this")
 
         , "Figure with `fig:` prefix in name" =:
             unlines [ "#+caption: Used as a metapher in evolutionary biology."
                     , "#+name: fig:redqueen"
-                    , "[[the-red-queen.jpg]]"
+                    , "[[./the-red-queen.jpg]]"
                     ] =?>
-            para (image "the-red-queen.jpg" "fig:redqueen"
+            para (image "./the-red-queen.jpg" "fig:redqueen"
                         "Used as a metapher in evolutionary biology.")
 
         , "Figure with HTML attributes" =:
             unlines [ "#+CAPTION: mah brain just explodid"
                     , "#+NAME: lambdacat"
                     , "#+ATTR_HTML: :style color: blue :role button"
-                    , "[[lambdacat.jpg]]"
+                    , "[[file:lambdacat.jpg]]"
                     ] =?>
             let kv = [("style", "color: blue"), ("role", "button")]
                 name = "fig:lambdacat"
@@ -842,7 +912,7 @@ tests =
         , "Labelled figure" =:
             unlines [ "#+CAPTION: My figure"
                     , "#+LABEL: fig:myfig"
-                    , "[[blub.png]]"
+                    , "[[file:blub.png]]"
                     ] =?>
             let attr = ("fig:myfig", mempty, mempty)
             in para (imageWith attr "blub.png" "fig:" "My figure")
@@ -1439,6 +1509,14 @@ tests =
                   , "#+END_VERSE"
                   ] =?>
           para ("foo" <> linebreak <> linebreak <> "bar")
+
+      , "Verse block with varying indentation" =:
+          unlines [ "#+BEGIN_VERSE"
+                  , "  hello darkness"
+                  , "my old friend"
+                  , "#+END_VERSE"
+                  ] =?>
+          para ("\160\160hello darkness" <> linebreak <> "my old friend")
 
       , "Raw block LaTeX" =:
           unlines [ "#+BEGIN_LaTeX"

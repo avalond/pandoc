@@ -296,6 +296,7 @@ stringToLaTeX  ctx (x:xs) = do
        ']' -> "{]}" ++ rest  -- optional arguments
        '\'' | ctx == CodeString -> "\\textquotesingle{}" ++ rest
        '\160' -> "~" ++ rest
+       '\x202F' -> "\\," ++ rest
        '\x2026' -> "\\ldots{}" ++ rest
        '\x2018' | ligatures -> "`" ++ rest
        '\x2019' | ligatures -> "'" ++ rest
@@ -732,7 +733,6 @@ sectionHeader unnumbered ident level lst = do
       noNote x        = x
   let lstNoNotes = walk noNote lst
   txtNoNotes <- inlineListToLaTeX lstNoNotes
-  let star = if unnumbered then text "*" else empty
   -- footnotes in sections don't work (except for starred variants)
   -- unless you specify an optional argument:
   -- \section[mysec]{mysec\footnote{blah}}
@@ -745,7 +745,6 @@ sectionHeader unnumbered ident level lst = do
                     else braces (text "\\texorpdfstring"
                          <> braces txt
                          <> braces (text plain))
-  let stuffing = star <> optional <> contents
   book <- gets stBook
   opts <- gets stOptions
   let level' = if book || writerChapters opts then level - 1 else level
@@ -765,6 +764,8 @@ sectionHeader unnumbered ident level lst = do
                   -- see http://tex.stackexchange.com/questions/169830/
                   else empty
   lab <- labelFor ident
+  let star = if unnumbered && level < 4 then text "*" else empty
+  let stuffing = star <> optional <> contents
   stuffing' <- hypertarget ident $ text ('\\':sectionType) <> stuffing <> lab
   return $ if level' > 5
               then txt

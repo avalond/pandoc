@@ -60,12 +60,12 @@ import Data.Unique (hashUnique, newUnique)
 import System.Random (randomRIO)
 import Text.Printf (printf)
 import qualified Control.Exception as E
-import Text.Pandoc.Compat.Monoid ((<>))
+import Data.Monoid ((<>))
 import Text.Pandoc.MIME (MimeType, getMimeType, getMimeTypeDef,
                          extensionFromMimeType)
 import Control.Applicative ((<|>))
-import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
-import Data.Char (ord)
+import Data.Maybe (fromMaybe, mapMaybe, maybeToList, isNothing)
+import Data.Char (ord, isSpace, toLower)
 
 data ListMarker = NoMarker
                 | BulletMarker
@@ -110,6 +110,8 @@ data WriterState = WriterState{
        , stStyleMaps      :: StyleMaps
        , stFirstPara      :: Bool
        , stTocTitle       :: [Inline]
+       , stDynamicParaProps :: [String]
+       , stDynamicTextProps :: [String]
        }
 
 defaultWriterState :: WriterState
@@ -132,6 +134,8 @@ defaultWriterState = WriterState{
       , stStyleMaps      = defaultStyleMaps
       , stFirstPara      = False
       , stTocTitle       = normalizeInlines [Str "Table of Contents"]
+      , stDynamicParaProps = []
+      , stDynamicTextProps = []
       }
 
 type WS a = StateT WriterState IO a
@@ -404,7 +408,21 @@ writeDocx opts doc@(Pandoc meta _) = do
         linkrels
 
   -- styles
-  let newstyles = styleToOpenXml styleMaps $ writerHighlightStyle opts
+
+  -- We only want to inject paragraph and text properties that
+  -- are not already in the style map. Note that keys in the stylemap
+  -- are normalized as lowercase.
+  let newDynamicParaProps = filter
+        (\sty -> isNothing $ M.lookup (toLower <$> sty) $ getMap $ sParaStyleMap styleMaps)
+        (stDynamicParaProps st)
+
+      newDynamicTextProps = filter
+        (\sty -> isNothing $ M.lookup (toLower <$> sty) $ getMap $ sCharStyleMap styleMaps)
+        (stDynamicTextProps st)
+
+  let newstyles = map newParaPropToOpenXml newDynamicParaProps ++
+                  map newTextPropToOpenXml newDynamicTextProps ++
+                  (styleToOpenXml styleMaps $ writerHighlightStyle opts) 
   let styledoc' = styledoc{ elContent = modifyContent (elContent styledoc) }
                   where
                     modifyContent
@@ -498,6 +516,28 @@ writeDocx opts doc@(Pandoc meta _) = do
                   imageEntries ++ headerFooterEntries ++
                   miscRelEntries ++ otherMediaEntries
   return $ fromArchive archive
+
+
+newParaPropToOpenXml :: String -> Element
+newParaPropToOpenXml s =
+  let styleId = filter (not . isSpace) s
+  in mknode "w:style" [ ("w:type", "paragraph")
+                      , ("w:customStyle", "1")
+                      , ("w:styleId", styleId)]
+     [ mknode "w:name" [("w:val", s)] ()
+     , mknode "w:basedOn" [("w:val","BodyText")] ()
+     , mknode "w:qFormat" [] ()
+     ]
+
+newTextPropToOpenXml :: String -> Element
+newTextPropToOpenXml s =
+  let styleId = filter (not . isSpace) s
+  in mknode "w:style" [ ("w:type", "character")
+                      , ("w:customStyle", "1")
+                      , ("w:styleId", styleId)]
+     [ mknode "w:name" [("w:val", s)] ()
+     , mknode "w:basedOn" [("w:val","BodyTextChar")] ()
+     ]
 
 styleToOpenXml :: StyleMaps -> Style -> [Element]
 styleToOpenXml sm style =
@@ -722,9 +762,17 @@ getUniqueId :: MonadIO m => m String
 -- already in word/document.xml.rel
 getUniqueId = liftIO $ (show . (+ 20) . hashUnique) `fmap` newUnique
 
+-- | Key for specifying user-defined docx styles.
+dynamicStyleKey :: String
+dynamicStyleKey = "custom-style"
+
 -- | Convert a Pandoc block element to OpenXML.
 blockToOpenXML :: WriterOptions -> Block -> WS [Element]
 blockToOpenXML _ Null = return []
+blockToOpenXML opts (Div (_,_,kvs) bs)
+  | Just sty <- lookup dynamicStyleKey kvs = do
+      modify $ \s -> s{stDynamicParaProps = sty : (stDynamicParaProps s)}
+      withParaPropM (pStyleM sty) $ blocksToOpenXML opts bs
 blockToOpenXML opts (Div (_,["references"],_) bs) = do
   let (hs, bs') = span isHeaderBlock bs
   header <- blocksToOpenXML opts hs
@@ -981,7 +1029,12 @@ inlineToOpenXML :: WriterOptions -> Inline -> WS [Element]
 inlineToOpenXML _ (Str str) = formattedString str
 inlineToOpenXML opts Space = inlineToOpenXML opts (Str " ")
 inlineToOpenXML opts SoftBreak = inlineToOpenXML opts (Str " ")
-inlineToOpenXML opts (Span (_,classes,kvs) ils)
+inlineToOpenXML opts (Span (ident,classes,kvs) ils)
+  | Just sty <- lookup dynamicStyleKey kvs = do
+      let kvs' = filter ((dynamicStyleKey, sty)/=) kvs
+      modify $ \s -> s{stDynamicTextProps = sty : (stDynamicTextProps s)}
+      withTextProp (rCustomStyle sty) $
+        inlineToOpenXML opts (Span (ident,classes,kvs') ils)
   | "insertion" `elem` classes = do
     defaultAuthor <- gets stChangesAuthor
     defaultDate <- gets stChangesDate

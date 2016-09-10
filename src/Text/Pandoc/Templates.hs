@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, CPP,
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances,
     OverloadedStrings, GeneralizedNewtypeDeriving #-}
 {-
 Copyright (C) 2009-2016 John MacFarlane <jgm@berkeley.edu>
@@ -98,7 +98,7 @@ import Control.Monad (guard, when)
 import Data.Aeson (ToJSON(..), Value(..))
 import qualified Text.Parsec as P
 import Text.Parsec.Text (Parser)
-import Text.Pandoc.Compat.Monoid ((<>))
+import Data.Monoid ((<>))
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
@@ -108,12 +108,8 @@ import qualified Data.Map as M
 import qualified Data.HashMap.Strict as H
 import Data.Foldable (toList)
 import qualified Control.Exception.Extensible as E (try, IOException)
-#if MIN_VERSION_blaze_html(0,5,0)
 import Text.Blaze.Html (Html)
 import Text.Blaze.Internal (preEscapedText)
-#else
-import Text.Blaze (preEscapedText, Html)
-#endif
 import Data.ByteString.Lazy (ByteString, fromChunks)
 import Text.Pandoc.Shared (readDataFileUTF8, ordNub)
 import Data.Vector ((!?))

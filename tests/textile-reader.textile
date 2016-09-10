@@ -68,6 +68,11 @@ bc. Code block with .bc
         continued
     @</\
 
+bc.. extended code block
+
+        continued
+p. ended by paragraph
+
 Inline code: @<tt>@, <tt>@</tt>.
 
 h1. Notextile
@@ -168,6 +173,8 @@ h2. Explicit
 Just a "url":http://www.url.com
 
 "Email link":mailto:nobody@nowhere.net
+
+"not a link": foo
 
 Automatic linking to "$":http://www.example.com.
 

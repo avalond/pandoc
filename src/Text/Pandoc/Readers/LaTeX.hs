@@ -232,7 +232,7 @@ inline = (mempty <$ comment)
      <|> (guardEnabled Ext_literate_haskell *> char '|' *> doLHSverb)
      <|> (str . (:[]) <$> tildeEscape)
      <|> (str . (:[]) <$> oneOf "[]")
-     <|> (str . (:[]) <$> oneOf "#&") -- TODO print warning?
+     <|> (str . (:[]) <$> oneOf "#&~^'`\"[]") -- TODO print warning?
      -- <|> (str <$> count 1 (satisfy (\c -> c /= '\\' && c /='\n' && c /='}' && c /='{'))) -- eat random leftover characters
 
 inlines :: LP Inlines
@@ -859,8 +859,14 @@ tok = try $ grouped inline <|> inlineCommand <|> str <$> count 1 inlineChar
 opt :: LP Inlines
 opt = bracketed inline
 
+rawopt :: LP String
+rawopt = do
+  contents <- bracketed (many1 (noneOf "]") <|> try (string "\\]"))
+  optional sp
+  return $ "[" ++ contents ++ "]"
+
 skipopts :: LP ()
-skipopts = skipMany (opt *> optional sp)
+skipopts = skipMany rawopt
 
 inlineText :: LP Inlines
 inlineText = str <$> many1 inlineChar
@@ -883,8 +889,9 @@ inlineEnvironment = try $ do
 
 rawEnv :: String -> LP Blocks
 rawEnv name = do
-  let addBegin x = "\\begin{" ++ name ++ "}" ++ x
   parseRaw <- getOption readerParseRaw
+  rawOptions <- mconcat <$> many rawopt
+  let addBegin x = "\\begin{" ++ name ++ "}" ++ rawOptions ++ x
   if parseRaw
      then (rawBlock "latex" . addBegin) <$>
             (withRaw (env name blocks) >>= applyMacros' . snd)
@@ -1275,7 +1282,7 @@ citationLabel  = optional sp *>
           <* optional sp
           <* optional (char ',')
           <* optional sp)
-  where isBibtexKeyChar c = isAlphaNum c || c `elem` (".:;?!`'()/*@_+=-[]*" :: String)
+  where isBibtexKeyChar c = isAlphaNum c || c `elem` (".:;?!`'()/*@_+=-[]" :: String)
 
 cites :: CitationMode -> Bool -> LP [Citation]
 cites mode multi = try $ do

@@ -960,6 +960,7 @@ Math rendering in HTML
 :   Use [KaTeX] to display embedded TeX math in HTML output.
     The *URL* should point to the `katex.js` load script. If a *URL* is
     not provided, a link to the KaTeX CDN will be inserted.
+    Note: [KaTeX] seems to work best with `html5` output.
 
 `--katex-stylesheet=`*URL*
 
@@ -1164,6 +1165,9 @@ including all [reveal.js configuration options].
 `theme`, `colortheme`, `fonttheme`, `innertheme`, `outertheme`
 :   themes for LaTeX [`beamer`] documents
 
+`themeoptions`
+:   options for LaTeX beamer themes (a list).
+
 `navigation`
 :   controls navigation symbols in `beamer` documents
     (default is `empty` for no navigation symbols; other valid values
@@ -1172,6 +1176,10 @@ including all [reveal.js configuration options].
 `section-titles`
 :   enables on "title pages" for new sections in `beamer`
     documents (default = true).
+
+`beamerarticle`
+:   when true, the `beamerarticle` package is loaded (for
+    producing an article from beamer slides).
 
 [reveal.js configuration options]: https://github.com/hakimel/reveal.js#configuration
 
@@ -3819,6 +3827,49 @@ To see a list of language names that pandoc will recognize, type
 To disable highlighting, use the `--no-highlight` option.
 
 [highlighting-kate]: https://github.com/jgm/highlighting-kate
+
+Custom Styles in Docx Output
+============================
+
+By default, pandoc's docx output applies a predefined set of styles for
+blocks such as paragraphs and block quotes, and uses largely default
+formatting (italics, bold) for inlines. This will work for most
+purposes, especially alongside a `reference.docx` file. However, if you
+need to apply your own styles to blocks, or match a preexisting set of
+styles, pandoc allows you to define custom styles for blocks and text
+using `div`s and `span`s, respecitively.
+
+If you define a `div` or `span` with the attribute `custom-style`,
+pandoc will apply your specified style to the contained elements. So,
+for example,
+
+    <span custom-style="Emphatically">Get out,</span> he said.
+
+would produce a docx file with "Get out," styled with character
+style `Emphatically`. Similarly,
+
+    Dickinson starts the poem simply:
+
+    <div custom-style="Poetry">
+    | A Bird came down the Walk---
+    | He did not know I saw---
+    </div>
+	
+would style the two contained lines with the `Poetry` paragraph style.
+
+If the styles are not yet in your reference.docx, they will be defined
+in the output file as inheriting from normal text. If they are already
+defined, pandoc will not alter the definition.
+
+This feature allows for greatest customization in conjunction with
+[pandoc filters]. If you want all paragraphs after block quotes to be
+indented, you can write a filter to apply the styles necessary. If you
+want all italics to be transformed to the `Emphasis` character style
+(perhaps to change their color), you can write a filter which will
+transform all italicized inlines to inlines within an `Emphasis`
+custom-style `span`.
+
+[pandoc filters]: http://pandoc.org/scripting.html
 
 Custom writers
 ==============

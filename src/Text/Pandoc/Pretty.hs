@@ -80,7 +80,7 @@ import Data.List (intercalate)
 import Data.String
 import Control.Monad.State
 import Data.Char (isSpace)
-import Text.Pandoc.Compat.Monoid ((<>))
+import Data.Monoid ((<>))
 
 data RenderState a = RenderState{
          output       :: [a]        -- ^ In reverse order
@@ -125,18 +125,6 @@ isEmpty = null . toList . unDoc
 -- | The empty document.
 empty :: Doc
 empty = mempty
-
-#if MIN_VERSION_base(4,5,0)
--- (<>) is defined in Data.Monoid
-#else
-infixr 6 <>
-
--- | An infix synonym for 'mappend'.
--- @a <> b@ is the result of concatenating @a@ with @b@.
-(<>) :: Monoid m => m -> m -> m
-(<>) = mappend
-{-# INLINE (<>) #-}
-#endif
 
 -- | Concatenate a list of 'Doc's.
 cat :: [Doc] -> Doc

@@ -60,12 +60,12 @@ import Text.Pandoc.Parsing
 import Text.Pandoc.Readers.HTML ( htmlTag, isBlockTag, isInlineTag )
 import Text.Pandoc.Shared (trim)
 import Text.Pandoc.Readers.LaTeX ( rawLaTeXInline, rawLaTeXBlock )
-import Text.HTML.TagSoup (parseTags, innerText, fromAttrib, Tag(..))
+import Text.HTML.TagSoup (fromAttrib, Tag(..))
 import Text.HTML.TagSoup.Match
-import Data.List ( intercalate, transpose )
+import Data.List ( intercalate, transpose, intersperse )
 import Data.Char ( digitToInt, isUpper )
 import Control.Monad ( guard, liftM, when )
-import Text.Pandoc.Compat.Monoid ((<>))
+import Data.Monoid ((<>))
 import Text.Printf
 import Debug.Trace (trace)
 import Text.Pandoc.Error
@@ -161,16 +161,28 @@ codeBlock = codeBlockBc <|> codeBlockPre
 
 codeBlockBc :: Parser [Char] ParserState Blocks
 codeBlockBc = try $ do
-  string "bc. "
-  contents <- manyTill anyLine blanklines
-  return $ B.codeBlock (unlines contents)
+  string "bc."
+  extended <- option False (True <$ char '.')
+  char ' '
+  let starts = ["p", "table", "bq", "bc", "h1", "h2", "h3",
+                "h4", "h5", "h6", "pre", "###", "notextile"]
+  let ender = choice $ map explicitBlockStart starts
+  contents <- if extended
+                 then do
+                   f <- anyLine
+                   rest <- many (notFollowedBy ender *> anyLine)
+                   return (f:rest)
+                 else manyTill anyLine blanklines
+  return $ B.codeBlock (trimTrailingNewlines (unlines contents))
+
+trimTrailingNewlines :: String -> String
+trimTrailingNewlines = reverse . dropWhile (=='\n') . reverse
 
 -- | Code Blocks in Textile are between <pre> and </pre>
 codeBlockPre :: Parser [Char] ParserState Blocks
 codeBlockPre = try $ do
   (t@(TagOpen _ attrs),_) <- htmlTag (tagOpen (=="pre") (const True))
-  result' <- (innerText . parseTags) `fmap` -- remove internal tags
-               manyTill anyChar (htmlTag (tagClose (=="pre")))
+  result' <- manyTill anyChar (htmlTag (tagClose (=="pre")))
   optional blanklines
   -- drop leading newline if any
   let result'' = case result' of
@@ -273,13 +285,20 @@ listStart = genericListStart '*'
 genericListStart :: Char -> Parser [Char] st ()
 genericListStart c = () <$ try (many1 (char c) >> whitespace)
 
-definitionListStart :: Parser [Char] ParserState Inlines
-definitionListStart = try $ do
+basicDLStart :: Parser [Char] ParserState ()
+basicDLStart = do
   char '-'
   whitespace
   notFollowedBy newline
+
+definitionListStart :: Parser [Char] ParserState Inlines
+definitionListStart = try $ do
+  basicDLStart
   trimInlines . mconcat <$>
-    many1Till inline (try (string ":=")) <* optional whitespace
+    many1Till inline
+     (  try (newline *> lookAhead basicDLStart)
+    <|> try (lookAhead (() <$ string ":="))
+     )
 
 listInline :: Parser [Char] ParserState Inlines
 listInline = try (notFollowedBy newline >> inline)
@@ -291,8 +310,8 @@ listInline = try (notFollowedBy newline >> inline)
 -- break.
 definitionListItem :: Parser [Char] ParserState (Inlines, [Blocks])
 definitionListItem = try $ do
-  term <- definitionListStart
-  def' <- multilineDef <|> inlineDef
+  term <- (mconcat . intersperse B.linebreak) <$> many1 definitionListStart
+  def' <- string ":=" *> optional whitespace *> (multilineDef <|> inlineDef)
   return (term, def')
   where inlineDef :: Parser [Char] ParserState [Blocks]
         inlineDef = liftM (\d -> [B.plain d])
@@ -401,14 +420,21 @@ ignorableRow = try $ do
   _ <- anyLine
   return ()
 
+explicitBlockStart :: String -> Parser [Char] ParserState ()
+explicitBlockStart name = try $ do
+  string name
+  attributes
+  char '.'
+  optional whitespace
+  optional endline
+
 -- | Blocks like 'p' and 'table' do not need explicit block tag.
 -- However, they can be used to set HTML/CSS attributes when needed.
 maybeExplicitBlock :: String  -- ^ block tag name
                     -> Parser [Char] ParserState Blocks -- ^ implicit block
                     -> Parser [Char] ParserState Blocks
 maybeExplicitBlock name blk = try $ do
-  optional $ try $ string name >> attributes >> char '.' >>
-    optional whitespace >> optional endline
+  optional $ explicitBlockStart name
   blk
 
 
@@ -567,7 +593,7 @@ link = try $ do
                 then char ']'
                 else lookAhead $ space <|>
                        try (oneOf "!.,;:" *> (space <|> newline))
-  url <- manyTill nonspaceChar stop
+  url <- many1Till nonspaceChar stop
   let name' = if B.toList name == [Str "$"] then B.str url else name
   return $ if attr == nullAttr
               then B.link url "" name'

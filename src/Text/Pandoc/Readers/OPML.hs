@@ -7,11 +7,11 @@ import Text.Pandoc.Builder
 import Text.Pandoc.Readers.HTML (readHtml)
 import Text.Pandoc.Readers.Markdown (readMarkdown)
 import Text.XML.Light
-import Text.Pandoc.Compat.TagSoupEntity (lookupEntity)
+import Text.HTML.TagSoup.Entity (lookupEntity)
 import Data.Generics
 import Control.Monad.State
 import Data.Default
-import Text.Pandoc.Compat.Except
+import Control.Monad.Except
 import Text.Pandoc.Error
 
 type OPML = ExceptT PandocError (State OPMLState)
@@ -53,7 +53,7 @@ normalizeTree = everywhere (mkT go)
         go xs = xs
 
 convertEntity :: String -> String
-convertEntity e = maybe (map toUpper e) (:[]) (lookupEntity e)
+convertEntity e = maybe (map toUpper e) id (lookupEntity e)
 
 -- convenience function to get an attribute value, defaulting to ""
 attrValue :: String -> Element -> String

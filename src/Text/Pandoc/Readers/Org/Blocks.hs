@@ -34,27 +34,25 @@ module Text.Pandoc.Readers.Org.Blocks
   ) where
 
 import           Text.Pandoc.Readers.Org.BlockStarts
-import           Text.Pandoc.Readers.Org.ExportSettings ( exportSettings )
 import           Text.Pandoc.Readers.Org.Inlines
+import           Text.Pandoc.Readers.Org.Meta ( metaExport, metaLine )
 import           Text.Pandoc.Readers.Org.ParserState
 import           Text.Pandoc.Readers.Org.Parsing
 import           Text.Pandoc.Readers.Org.Shared
-                   ( isImageFilename, rundocBlockClass, toRundocAttrib
-                   , translateLang )
+                   ( cleanLinkString, isImageFilename, rundocBlockClass
+                   , toRundocAttrib, translateLang )
 
 import qualified Text.Pandoc.Builder as B
 import           Text.Pandoc.Builder ( Inlines, Blocks )
 import           Text.Pandoc.Definition
-import           Text.Pandoc.Compat.Monoid ((<>))
 import           Text.Pandoc.Options
 import           Text.Pandoc.Shared ( compactify', compactify'DL )
 
 import           Control.Monad ( foldM, guard, mzero, void )
 import           Data.Char ( isSpace, toLower, toUpper)
 import           Data.List ( foldl', intersperse, isPrefixOf )
-import qualified Data.Map as M
 import           Data.Maybe ( fromMaybe, isNothing )
-import           Network.HTTP ( urlEncode )
+import           Data.Monoid ((<>))
 
 --
 -- Org headers
@@ -81,6 +79,10 @@ newtype PropertyValue = PropertyValue { fromValue :: String }
 -- | Create a property value containing the given string.
 toPropertyValue :: String -> PropertyValue
 toPropertyValue = PropertyValue
+
+-- | Check whether the property value is non-nil (i.e. truish).
+isNonNil :: PropertyValue -> Bool
+isNonNil p = map toLower (fromValue p) `notElem` ["()", "{}", "nil"]
 
 -- | Key/value pairs from a PROPERTIES drawer
 type Properties = [(PropertyKey, PropertyValue)]
@@ -202,12 +204,16 @@ propertiesToAttr properties =
     toStringPair prop = (fromKey (fst prop), fromValue (snd prop))
     customIdKey = toPropertyKey "custom_id"
     classKey    = toPropertyKey "class"
+    unnumberedKey = toPropertyKey "unnumbered"
+    specialProperties = [customIdKey, classKey, unnumberedKey]
     id'  = fromMaybe mempty . fmap fromValue . lookup customIdKey $ properties
     cls  = fromMaybe mempty . fmap fromValue . lookup classKey    $ properties
-    kvs' = map toStringPair . filter ((`notElem` [customIdKey, classKey]) . fst)
+    kvs' = map toStringPair . filter ((`notElem` specialProperties) . fst)
            $ properties
+    isUnnumbered =
+      fromMaybe False . fmap isNonNil . lookup unnumberedKey $ properties
   in
-    (id', words cls, kvs')
+    (id', words cls ++ (if isUnnumbered then ["unnumbered"] else []), kvs')
 
 tagTitle :: Inlines -> [Tag] -> Inlines
 tagTitle title tags = title <> (mconcat $ map tagToInline tags)
@@ -232,8 +238,8 @@ blockList = do
 -- | Get the meta information safed in the state.
 meta :: OrgParser Meta
 meta = do
-  st <- getState
-  return $ runF (orgStateMeta st) st
+  meta' <- metaExport
+  runF meta' <$> getState
 
 blocks :: OrgParser (F Blocks)
 blocks = mconcat <$> manyTill block (void (lookAhead headerStart) <|> eof)
@@ -422,7 +428,16 @@ verseBlock blockType = try $ do
   ignHeaders
   content <- rawBlockContent blockType
   fmap B.para . mconcat . intersperse (pure B.linebreak)
-    <$> mapM (parseFromString inlines) (map (++ "\n") . lines $ content)
+    <$> mapM parseVerseLine (lines content)
+ where
+   -- replace initial spaces with nonbreaking spaces to preserve
+   -- indentation, parse the rest as normal inline
+   parseVerseLine :: String -> OrgParser (F Inlines)
+   parseVerseLine cs = do
+     let (initialSpaces, indentedLine) = span isSpace cs
+     let nbspIndent = B.str $ map (const '\160') initialSpaces
+     line <- parseFromString inlines (indentedLine ++ "\n")
+     return (pure nbspIndent <> line)
 
 -- | Read a code block and the associated results block if present.  Which of
 -- boths blocks is included in the output is determined using the "exports"
@@ -571,23 +586,33 @@ figure :: OrgParser (F Blocks)
 figure = try $ do
   figAttrs <- blockAttributes
   src <- skipSpaces *> selfTarget <* skipSpaces <* newline
-  guard . not . isNothing . blockAttrCaption $ figAttrs
-  guard (isImageFilename src)
-  let figName    = fromMaybe mempty $ blockAttrName figAttrs
-  let figLabel   = fromMaybe mempty $ blockAttrLabel figAttrs
-  let figCaption = fromMaybe mempty $ blockAttrCaption figAttrs
-  let figKeyVals = blockAttrKeyValues figAttrs
-  let attr       = (figLabel, mempty, figKeyVals)
-  return $ (B.para . B.imageWith attr src (withFigPrefix figName) <$> figCaption)
+  case cleanLinkString src of
+    Nothing     -> mzero
+    Just imgSrc -> do
+      guard (not . isNothing . blockAttrCaption $ figAttrs)
+      guard (isImageFilename imgSrc)
+      return $ figureBlock figAttrs imgSrc
  where
+   selfTarget :: OrgParser String
+   selfTarget = try $ char '[' *> linkTarget <* char ']'
+
+   figureBlock :: BlockAttributes -> String -> (F Blocks)
+   figureBlock figAttrs imgSrc =
+     let
+       figName    = fromMaybe mempty $ blockAttrName figAttrs
+       figLabel   = fromMaybe mempty $ blockAttrLabel figAttrs
+       figCaption = fromMaybe mempty $ blockAttrCaption figAttrs
+       figKeyVals = blockAttrKeyValues figAttrs
+       attr       = (figLabel, mempty, figKeyVals)
+     in
+       B.para . B.imageWith attr imgSrc (withFigPrefix figName) <$> figCaption
+
    withFigPrefix :: String -> String
    withFigPrefix cs =
      if "fig:" `isPrefixOf` cs
      then cs
      else "fig:" ++ cs
 
-   selfTarget :: OrgParser String
-   selfTarget = try $ char '[' *> linkTarget <* char ']'
 
 --
 -- Examples
@@ -612,66 +637,8 @@ exampleCode = B.codeBlockWith ("", ["example"], [])
 specialLine :: OrgParser (F Blocks)
 specialLine = fmap return . try $ metaLine <|> commentLine
 
--- The order, in which blocks are tried, makes sure that we're not looking at
--- the beginning of a block, so we don't need to check for it
-metaLine :: OrgParser Blocks
-metaLine = mempty <$ metaLineStart <* (optionLine <|> declarationLine)
-
 commentLine :: OrgParser Blocks
 commentLine = commentLineStart *> anyLine *> pure mempty
-
-declarationLine :: OrgParser ()
-declarationLine = try $ do
-  key   <- metaKey
-  value <- metaInlines
-  updateState $ \st ->
-    let meta' = B.setMeta key <$> value <*> pure nullMeta
-    in st { orgStateMeta = orgStateMeta st <> meta' }
-
-metaInlines :: OrgParser (F MetaValue)
-metaInlines = fmap (MetaInlines . B.toList) <$> inlinesTillNewline
-
-metaKey :: OrgParser String
-metaKey = map toLower <$> many1 (noneOf ": \n\r")
-                      <*  char ':'
-                      <*  skipSpaces
-
-optionLine :: OrgParser ()
-optionLine = try $ do
-  key <- metaKey
-  case key of
-    "link"    -> parseLinkFormat >>= uncurry addLinkFormat
-    "options" -> exportSettings
-    _         -> mzero
-
-addLinkFormat :: String
-              -> (String -> String)
-              -> OrgParser ()
-addLinkFormat key formatter = updateState $ \s ->
-  let fs = orgStateLinkFormatters s
-  in s{ orgStateLinkFormatters = M.insert key formatter fs }
-
-parseLinkFormat :: OrgParser ((String, String -> String))
-parseLinkFormat = try $ do
-  linkType <- (:) <$> letter <*> many (alphaNum <|> oneOf "-_") <* skipSpaces
-  linkSubst <- parseFormat
-  return (linkType, linkSubst)
-
--- | An ad-hoc, single-argument-only implementation of a printf-style format
--- parser.
-parseFormat :: OrgParser (String -> String)
-parseFormat = try $ do
-  replacePlain <|> replaceUrl <|> justAppend
- where
-   -- inefficient, but who cares
-   replacePlain = try $ (\x -> concat . flip intersperse x)
-                     <$> sequence [tillSpecifier 's', rest]
-   replaceUrl   = try $ (\x -> concat . flip intersperse x . urlEncode)
-                     <$> sequence [tillSpecifier 'h', rest]
-   justAppend   = try $ (++) <$> rest
-
-   rest            = manyTill anyChar         (eof <|> () <$ oneOf "\n\r")
-   tillSpecifier c = manyTill (noneOf "\n\r") (try $ string ('%':c:""))
 
 
 --
@@ -848,9 +815,6 @@ paraOrPlain = try $ do
        *> notFollowedBy (inList *> (() <$ orderedListStart <|> bulletListStart))
        *> return (B.para <$> ils))
     <|>  (return (B.plain <$> ils))
-
-inlinesTillNewline :: OrgParser (F Inlines)
-inlinesTillNewline = trimInlinesF . mconcat <$> manyTill inline newline
 
 
 --

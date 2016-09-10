@@ -132,7 +132,7 @@ import System.IO (stderr)
 import System.IO.Temp
 import Text.HTML.TagSoup (renderTagsOptions, RenderOptions(..), Tag(..),
          renderOptions)
-import Text.Pandoc.Compat.Monoid ((<>))
+import Data.Monoid ((<>))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
 import Data.ByteString.Base64 (decodeLenient)
@@ -152,16 +152,7 @@ import Paths_pandoc (getDataFileName)
 #ifdef HTTP_CLIENT
 import Network.HTTP.Client (httpLbs, responseBody, responseHeaders,
                             Request(port,host))
-#if MIN_VERSION_http_client(0,4,30)
-import Network.HTTP.Client (parseRequest)
-#else
-import Network.HTTP.Client (parseUrl)
-#endif
-#if MIN_VERSION_http_client(0,4,18)
-import Network.HTTP.Client (newManager)
-#else
-import Network.HTTP.Client (withManager)
-#endif
+import Network.HTTP.Client (parseRequest, newManager)
 import Network.HTTP.Client.Internal (addProxy)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Environment (getEnv)
@@ -873,7 +864,7 @@ readDefaultDataFile fname =
         go as     x    = x : as
 #else
   getDataFileName fname' >>= checkExistence >>= BS.readFile
-    where fname' = if fname == "README" then fname else "data" </> fname
+    where fname' = if fname == "MANUAL.txt" then fname else "data" </> fname
 
 checkExistence :: FilePath -> IO FilePath
 checkExistence fn = do
@@ -1071,7 +1062,7 @@ blocksToInlinesWithSep sep blks = intercalate sep $ map blockToInlines blks
 
 blocksToInlines :: [Block] -> [Inline]
 blocksToInlines = blocksToInlinesWithSep [Space, Str "¶", Space]
-        
+
 
 --
 -- Safe read

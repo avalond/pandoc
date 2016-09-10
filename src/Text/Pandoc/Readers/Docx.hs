@@ -1,7 +1,7 @@
-{-# LANGUAGE PatternGuards, OverloadedStrings #-}
+{-# LANGUAGE PatternGuards, OverloadedStrings, CPP #-}
 
 {-
-Copyright (C) 2014 Jesse Rosenthal <jrosenthal@jhu.edu>
+Copyright (C) 2014-2016 Jesse Rosenthal <jrosenthal@jhu.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 {- |
    Module      : Text.Pandoc.Readers.Docx
-   Copyright   : Copyright (C) 2014 Jesse Rosenthal
+   Copyright   : Copyright (C) 2014-2016 Jesse Rosenthal
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Jesse Rosenthal <jrosenthal@jhu.edu>
@@ -83,7 +83,7 @@ import Text.Pandoc.Readers.Docx.Lists
 import Text.Pandoc.Readers.Docx.Combine
 import Text.Pandoc.Shared
 import Text.Pandoc.MediaBag (insertMedia, MediaBag)
-import Data.List (delete, (\\), intersect)
+import Data.List (delete, intersect)
 import Text.TeXMath (writeTeX)
 import Data.Default (Default)
 import qualified Data.ByteString.Lazy as B
@@ -93,9 +93,12 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Data.Sequence (ViewL(..), viewl)
 import qualified Data.Sequence as Seq (null)
+#if !(MIN_VERSION_base(4,8,0))
+import Data.Traversable (traverse)
+#endif
 
 import Text.Pandoc.Error
-import Text.Pandoc.Compat.Except
+import Control.Monad.Except
 
 readDocxWithWarnings :: ReaderOptions
                      -> B.ByteString
@@ -412,39 +415,39 @@ parPartToInlines (PlainOMath exps) = do
   return $ math $ writeTeX exps
 
 isAnchorSpan :: Inline -> Bool
-isAnchorSpan (Span (_, classes, kvs) ils) =
+isAnchorSpan (Span (_, classes, kvs) _) =
   classes == ["anchor"] &&
-  null kvs &&
-  null ils
+  null kvs
 isAnchorSpan _ = False
 
 dummyAnchors :: [String]
 dummyAnchors = ["_GoBack"]
 
 makeHeaderAnchor :: Blocks -> DocxContext Blocks
-makeHeaderAnchor bs = case viewl $ unMany bs of
-  (x :< xs) -> do
-    x' <- (makeHeaderAnchor' x)
-    xs' <- (makeHeaderAnchor $ Many xs)
-    return $ (singleton x') <> xs'
-  EmptyL    -> return mempty
+makeHeaderAnchor bs = traverse makeHeaderAnchor' bs
 
 makeHeaderAnchor' :: Block -> DocxContext Block
 -- If there is an anchor already there (an anchor span in the header,
 -- to be exact), we rename and associate the new id with the old one.
-makeHeaderAnchor' (Header n (_, classes, kvs) ils)
-  | (c:cs) <- filter isAnchorSpan ils
-  , (Span (ident, ["anchor"], _) _) <- c = do
+makeHeaderAnchor' (Header n (ident, classes, kvs) ils)
+  | (c:_) <- filter isAnchorSpan ils
+  , (Span (anchIdent, ["anchor"], _) cIls) <- c = do
     hdrIDMap <- gets docxAnchorMap
-    let newIdent = uniqueIdent ils (Set.fromList $ M.elems hdrIDMap)
-    modify $ \s -> s {docxAnchorMap = M.insert ident newIdent hdrIDMap}
-    return $ Header n (newIdent, classes, kvs) (ils \\ (c:cs))
+    let newIdent = if null ident
+                   then uniqueIdent ils (Set.fromList $ M.elems hdrIDMap)
+                   else ident
+        newIls = concatMap f ils where f il | il == c   = cIls
+                                            | otherwise = [il]
+    modify $ \s -> s {docxAnchorMap = M.insert anchIdent newIdent hdrIDMap}
+    makeHeaderAnchor' $ Header n (newIdent, classes, kvs) newIls
 -- Otherwise we just give it a name, and register that name (associate
 -- it with itself.)
-makeHeaderAnchor' (Header n (_, classes, kvs) ils) =
+makeHeaderAnchor' (Header n (ident, classes, kvs) ils) =
   do
     hdrIDMap <- gets docxAnchorMap
-    let newIdent = uniqueIdent ils (Set.fromList $ M.elems hdrIDMap)
+    let newIdent = if null ident
+                   then uniqueIdent ils (Set.fromList $ M.elems hdrIDMap)
+                   else ident
     modify $ \s -> s {docxAnchorMap = M.insert newIdent newIdent hdrIDMap}
     return $ Header n (newIdent, classes, kvs) ils
 makeHeaderAnchor' blk = return blk

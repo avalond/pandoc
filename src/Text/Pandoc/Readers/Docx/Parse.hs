@@ -1,7 +1,7 @@
 {-# LANGUAGE PatternGuards, ViewPatterns, FlexibleInstances #-}
 
 {-
-Copyright (C) 2014 Jesse Rosenthal <jrosenthal@jhu.edu>
+Copyright (C) 2014-2016 Jesse Rosenthal <jrosenthal@jhu.edu>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 
 {- |
  Module : Text.Pandoc.Readers.Docx.Parse
- Copyright : Copyright (C) 2014 Jesse Rosenthal
+ Copyright : Copyright (C) 2014-2016 Jesse Rosenthal
  License : GNU GPL, version 2 or above
 
  Maintainer : Jesse Rosenthal <jrosenthal@jhu.edu>
@@ -64,7 +64,7 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Control.Applicative ((<|>))
 import qualified Data.Map as M
-import Text.Pandoc.Compat.Except
+import Control.Monad.Except
 import Text.Pandoc.Shared (safeRead)
 import Text.TeXMath.Readers.OMML (readOMML)
 import Text.Pandoc.Readers.Docx.Fonts (getUnicode, Font(..))
@@ -90,9 +90,6 @@ data ReaderState = ReaderState { stateWarnings :: [String] }
 
 data DocxError = DocxError | WrongElem
                deriving Show
-
-instance Error DocxError where
-  noMsg = WrongElem
 
 type D = ExceptT DocxError (ReaderT ReaderEnv (State ReaderState))
 
@@ -457,40 +454,33 @@ lookupLevel numId ilvl (Numbering _ numbs absNumbs) = do
 
 
 numElemToNum :: NameSpaces -> Element -> Maybe Numb
-numElemToNum ns element |
-  qName (elName element) == "num" &&
-  qURI (elName element) == (lookup "w" ns) = do
-    numId <- findAttr (QName "numId" (lookup "w" ns) (Just "w")) element
-    absNumId <- findChild (QName "abstractNumId" (lookup "w" ns) (Just "w")) element
-                >>= findAttr (QName "val" (lookup "w" ns) (Just "w"))
-    return $ Numb numId absNumId
+numElemToNum ns element
+  | isElem ns "w" "num" element = do
+      numId <- findAttr (elemName ns "w" "numId") element
+      absNumId <- findChild (elemName ns "w" "abstractNumId") element
+                  >>= findAttr (elemName ns "w" "val")
+      return $ Numb numId absNumId
 numElemToNum _ _ = Nothing
 
 absNumElemToAbsNum :: NameSpaces -> Element -> Maybe AbstractNumb
-absNumElemToAbsNum ns element |
-  qName (elName element) == "abstractNum" &&
-  qURI (elName element) == (lookup "w" ns) = do
-    absNumId <- findAttr
-                (QName "abstractNumId" (lookup "w" ns) (Just "w"))
-                element
-    let levelElems = findChildren
-                 (QName "lvl" (lookup "w" ns) (Just "w"))
-                 element
-        levels = mapMaybe (levelElemToLevel ns) levelElems
-    return $ AbstractNumb absNumId levels
+absNumElemToAbsNum ns element
+  | isElem ns "w" "abstractNum" element = do
+      absNumId <- findAttr (elemName ns "w" "abstractNumId") element
+      let levelElems = findChildren (elemName ns "w" "lvl") element
+          levels = mapMaybe (levelElemToLevel ns) levelElems
+      return $ AbstractNumb absNumId levels
 absNumElemToAbsNum _ _ = Nothing
 
 levelElemToLevel :: NameSpaces -> Element -> Maybe Level
-levelElemToLevel ns element |
-    qName (elName element) == "lvl" &&
-    qURI (elName element) == (lookup "w" ns) = do
-      ilvl <- findAttr (QName "ilvl" (lookup "w" ns) (Just "w")) element
-      fmt <- findChild (QName "numFmt" (lookup "w" ns) (Just "w")) element
-             >>= findAttr (QName "val" (lookup "w" ns) (Just "w"))
-      txt <- findChild (QName "lvlText" (lookup "w" ns) (Just "w")) element
-             >>= findAttr (QName "val" (lookup "w" ns) (Just "w"))
-      let start = findChild (QName "start" (lookup "w" ns) (Just "w")) element
-                  >>= findAttr (QName "val" (lookup "w" ns) (Just "w"))
+levelElemToLevel ns element
+  | isElem ns "w" "lvl" element = do
+      ilvl <- findAttr (elemName ns "w" "ilvl") element
+      fmt <- findChild (elemName ns "w" "numFmt") element
+             >>= findAttr (elemName ns "w" "val")
+      txt <- findChild (elemName ns "w" "lvlText") element
+             >>= findAttr (elemName ns "w" "val")
+      let start = findChild (elemName ns "w" "start") element
+                  >>= findAttr (elemName ns "w" "val")
                   >>= (\s -> listToMaybe (map fst (reads s :: [(Integer, String)])))
       return (ilvl, fmt, txt, start)
 levelElemToLevel _ _ = Nothing
@@ -502,12 +492,8 @@ archiveToNumbering' zf = do
     Just entry -> do
       numberingElem <- (parseXMLDoc . UTF8.toStringLazy . fromEntry) entry
       let namespaces = elemToNameSpaces numberingElem
-          numElems = findChildren
-                     (QName "num" (lookup "w" namespaces) (Just "w"))
-                     numberingElem
-          absNumElems = findChildren
-                        (QName "abstractNum" (lookup "w" namespaces) (Just "w"))
-                        numberingElem
+          numElems = findChildren (elemName namespaces "w" "num") numberingElem
+          absNumElems = findChildren (elemName namespaces "w" "abstractNum") numberingElem
           nums = mapMaybe (numElemToNum namespaces) numElems
           absNums = mapMaybe (absNumElemToAbsNum namespaces) absNumElems
       return $ Numbering namespaces nums absNums
@@ -584,13 +570,13 @@ elemToParIndentation :: NameSpaces -> Element -> Maybe ParIndentation
 elemToParIndentation ns element | isElem ns "w" "ind" element =
   Just $ ParIndentation {
     leftParIndent =
-       findAttr (QName "left" (lookup "w" ns) (Just "w")) element >>=
+       findAttr (elemName ns "w" "left") element >>=
        stringToInteger
     , rightParIndent =
-      findAttr (QName "right" (lookup "w" ns) (Just "w")) element >>=
+      findAttr (elemName ns "w" "right") element >>=
       stringToInteger
     , hangingParIndent =
-      findAttr (QName "hanging" (lookup "w" ns) (Just "w")) element >>=
+      findAttr (elemName ns "w" "hanging") element >>=
       stringToInteger}
 elemToParIndentation _ _ = Nothing
 
@@ -677,7 +663,7 @@ elemToParPart ns element
   , Just drawingElem <- findChild (elemName ns "w" "drawing") element =
     let a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
         drawing = findElement (QName "blip" (Just a_ns) (Just "a")) element
-                  >>= findAttr (QName "embed" (lookup "r" ns) (Just "r"))
+                  >>= findAttr (elemName ns "r" "embed")
     in
      case drawing of
        Just s -> expandDrawingId s >>= (\(fp, bs) -> return $ Drawing fp bs $ elemToExtent drawingElem)
